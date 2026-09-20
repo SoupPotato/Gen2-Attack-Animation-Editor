@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>pokecrystal battle animation editor</title>
+<!-- build 2026-09-19 17:41 UTC -->
 <style>
   :root{
     --bg:#14161a; --panel:#1b1e24; --panel2:#22262e; --line:#2e3440;
@@ -24,6 +25,8 @@
   input[type=number]{width:58px}
   header{display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid var(--line);background:var(--panel)}
   header h1{font-size:13px;margin:0;font-weight:700;letter-spacing:.5px}
+  #credit{color:var(--accent2);font-size:11px;white-space:nowrap}
+  .card .by{color:var(--accent2);margin:-6px 0 10px;font-size:12px}
   header .spacer{flex:1}
   #status{color:var(--dim);font-size:11px;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #main{display:flex;height:calc(100% - 41px)}
@@ -56,6 +59,12 @@
   td.a{width:100%}
   td.b{white-space:nowrap;text-align:right}
   .lbl{color:var(--warn)}
+  #piccheck{max-height:180px;overflow-y:auto;margin:4px 0;padding:3px 5px;
+    background:#12141a;border:1px solid var(--accent2);border-radius:4px;
+    font-size:11px;line-height:15px;white-space:pre}
+  #piccheck .bad{color:#e06060}
+  #piccheck .warnline{color:var(--warn)}
+  #piccheck .ok{color:#60c080}
   /* species picker: a real dropdown cannot be told where to scroll, so this
      stands in for one and opens with the selection on the top row */
   .picker{position:relative;display:inline-block}
@@ -93,6 +102,7 @@
 <div id="open">
   <div class="card">
     <h2>pokecrystal battle animation editor</h2>
+    <p class="by">created by SourApple</p>
     <p>Open your repo folder (the one containing <code>data/moves/animations.asm</code>).
        Everything runs in this page — no server, no upload.</p>
     <div class="btns">
@@ -109,6 +119,7 @@
 
 <header>
   <h1>BATTLE ANIM EDITOR</h1>
+  <span id="credit">created by SourApple</span>
   <span id="status">no repo open</span>
   <span class="spacer"></span>
   <button id="reload">Reload repo</button>
@@ -188,6 +199,12 @@
           <input type="range" id="volume" min="0" max="100" value="50" step="1">
           <span id="volval">50%</span>
         </div>
+        <div class="line">
+          <button id="checkrepo" class="sm" title="what the tool found in this repo">repo report</button>
+          <button id="checkpics" class="sm" title="re-scan every species pic in the loaded repo">check sprites</button>
+          <span id="checkpicsum" class="lbl"></span>
+        </div>
+        <div id="piccheck" class="hidden"></div>
         <div id="legend"></div>
       </div>
     </div>
@@ -264,12 +281,20 @@ function syncSceneInputs(){
   $("#showTarget").checked = scene.target;
   $("#showUser").checked = scene.user;
 }
+/* The outlines the "pic boxes" overlay draws. These used to be sized from the
+   placeholder screenshots, so they vanished once those were dropped and both
+   pics came from the repo. They are the game's own boxes now - the coordinate
+   and square that RunPicResizeScript grows each side to - which is also where
+   the pics are actually drawn, screenshot or not. */
 function monRects(){
   const out = [];
-  if (scene.target && targetImg) out.push({k:"target", x:scene.tx, y:scene.ty,
-    w:targetImg.width, h:targetImg.height});
-  if (scene.user && userImg) out.push({k:"user", x:scene.ux, y:scene.uy,
-    w:userImg.width, h:userImg.height});
+  for (const side of [0, 1]){
+    if (side === 0 ? !scene.target : !scene.user) continue;
+    const base = picBase(side), px = base * 8;
+    const box = swapPicBox(side, base)
+      || {x: side ? scene.ux : scene.tx, y: side ? scene.uy : scene.ty};
+    out.push({k: side ? "user" : "target", x: box.x, y: box.y, w: px, h: px});
+  }
   return out;
 }
 
@@ -1031,6 +1056,62 @@ function buildMonPickers(){
   };
   fill("monEnemy", 0);
   fill("monPlayer", 1);
+  const cp = $("#checkpics"), panel = $("#piccheck"), sum = $("#checkpicsum");
+  if (cp) cp.onclick = async () => {
+    if (!REPO || !MON_LIST.length) return;
+    cp.disabled = true; sum.textContent = "scanning\u2026";
+    const {bad, warn, info} = await checkMonPics(REPO, MON_LIST);
+    cp.disabled = false;
+    sum.textContent = bad.length + " unusable" +
+      (warn.length ? ", " + warn.length + " worth a look" : "");
+    panel.classList.remove("hidden");
+    const esc = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    const hx = v => "#" + ((v >>> 0) & 0xffffff).toString(16).padStart(6, "0");
+    /* Read straight out of the loaded pic rather than re-deriving: this is the
+       exact array the renderer paints with, so if it disagrees with the file
+       the fault is downstream of the palette. */
+    const picked = [0, 1].map(side => {
+      const e = MON_LIST[monPick[side]];
+      const pic = monPicStore[side];
+      if (!e) return "";
+      const who = side ? "player" : "enemy ";
+      if (!pic) return `${who} ${e.folder}: not loaded (${monPicError[side] || "?"})`;
+      const shiny = monShiny[side] ? " [shiny]" : "";
+      const usage = {};
+      for (const v of pic.idx) usage[v] = (usage[v] || 0) + 1;
+      const parts = [0, 1, 2, 3].map(i => `${i}=${hx(pic.pal[i])}x${usage[i] || 0}`);
+      return `${who} ${e.folder} ${pic.back ? "back" : "front"} ${pic.size}t` +
+             `${e.reverse ? " [--reverse]" : ""}${shiny}  ${parts.join("  ")}`;
+    }).filter(Boolean);
+    panel.innerHTML =
+      info.map(i => `<div class="ok">${esc(i)}</div>`).join("") +
+      picked.map(i => `<div class="ok">${esc(i)}</div>`).join("") +
+      bad.map(b => `<div class="bad">${esc(b)}</div>`).join("") +
+      warn.map(w => `<div class="warnline">${esc(w)}</div>`).join("") +
+      (bad.length || warn.length ? ""
+        : `<div class="ok">all ${MON_LIST.length} species: 4-colour indexed, front and back agree</div>`);
+  };
+
+  const rr = $("#checkrepo");
+  if (rr) rr.onclick = () => {
+    panel.classList.remove("hidden");
+    const esc = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    const miss = REPO_REPORT.filter(r => !r.file);
+    const alt  = REPO_REPORT.filter(r => r.alt);
+    sum.textContent = (REPO_REPORT.length - miss.length) + "/" + REPO_REPORT.length +
+                      " sources found";
+    panel.innerHTML = REPO_REPORT.map(r => {
+      if (!r.file)
+        return `<div class="bad">${esc(r.key)}: not found - tried ${esc(r.tried.join(", "))}</div>`;
+      const cls = r.alt ? "warnline" : "ok";
+      return `<div class="${cls}">${esc(r.key)}: ${esc(r.file)}` +
+             (r.alt ? " (fallback path)" : "") +
+             (r.got ? "  \u2014 " + esc(r.got) : "") + "</div>";
+    }).join("") +
+      (miss.length ? `<div class="bad">${miss.length} source(s) missing: the features they feed are inert</div>` : "") +
+      (alt.length ? `<div class="warnline">${alt.length} source(s) came from a fallback path</div>` : "");
+  };
+
   const mus = $("#music");
   if (mus){
     mus.innerHTML = '<option value="">off</option>' + MUSIC_LIST.map(m =>
@@ -1110,8 +1191,19 @@ const CONST_FILES = [
   "constants/battle_constants.asm", "constants/pokemon_constants.asm",
 ];
 
-async function pickPath(repo, list){
-  for (const p of list) if (await repo.has(p)) return p;
+/* What each data source resolved to on this repo. Everything the tool knows
+   is read from the repo, but a fork that moves, renames or drops a file gets
+   a quietly degraded preview rather than an error - the graphics still draw,
+   the animation still plays, it is just missing whatever that file carried.
+   Recording the outcome of every lookup is what makes that visible. */
+let REPO_REPORT = [];
+async function pickPath(repo, list, key){
+  for (const p of list)
+    if (await repo.has(p)){
+      if (key) REPO_REPORT.push({key, file: p, alt: p !== list[0]});
+      return p;
+    }
+  if (key) REPO_REPORT.push({key, file: null, tried: list});
   return null;
 }
 
@@ -1144,8 +1236,10 @@ function parseCoordFix(text, consts){
 
 async function loadRepo(repo, log){
   const say = m => { log && log(m); };
+  say("build 2026-09-19 17:41 UTC");
   const path = {};
-  for (const k of Object.keys(FILES)) path[k] = await pickPath(repo, FILES[k]);
+  REPO_REPORT = [];
+  for (const k of Object.keys(FILES)) path[k] = await pickPath(repo, FILES[k], k);
   if (!path.anims)
     throw new Error("No animations.asm found (looked for " + FILES.anims.join(", ") +
                     ") - is this a pokecrystal-based repo root?");
@@ -1191,12 +1285,11 @@ async function loadRepo(repo, log){
     const find = n => Math.max(0, MON_LIST.findIndex(m => m.folder === n));
     monPick = [find("hoothoot"), find("squirtle")];
     say("species: " + MON_LIST.length + " from data/pokemon/palettes.asm");
-    const badPics = await checkMonPics(repo, MON_LIST);
-    if (badPics.length){
-      say("pics that are not 4-colour indexed and will not load (" +
-          badPics.length + "):");
-      for (const b of badPics) say("  " + b);
-    }
+    const pc = await checkMonPics(repo, MON_LIST);
+    if (pc.bad.length || pc.warn.length)
+      say("sprite check: " + pc.bad.length + " pic(s) will not load" +
+          (pc.warn.length ? ", " + pc.warn.length + " worth a look" : "") +
+          " - press \u201ccheck sprites\u201d for the list");
   }
   CHARMAP = parseCharmap(path.charmap ? await repo.text(path.charmap) : "");
   FONT_TILES = await loadFont(repo, path.font);
@@ -1316,6 +1409,34 @@ async function loadRepo(repo, log){
     gfxWarnings, unimplemented,
     bgUnimplemented: BG_EFFECT_ORDER.filter(n => n && !BGF[n]),
   };
+  /* Counts alongside the files: a path that resolved but parsed to nothing is
+     the real failure mode for a divergent fork, and it looks identical to
+     success until something is missing on screen. */
+  const yielded = {
+    anims: D.table.length + " moves, " + Object.keys(D.blocks).length + " scripts",
+    objects: D.objects.length + " objects",
+    framesets: D.framesets.length + " framesets",
+    oam: D.oamsets.length + " oam sets",
+    objectGfx: D.gfx.length + " gfx sets",
+    functions: ANIM_FUNC_ORDER.length + " functions, " +
+               (ANIM_FUNC_ORDER.length - (D.unimplemented || []).length) + " simulated",
+    bgEffects: BG_EFFECT_ORDER.length + " effects, " +
+               (BG_EFFECT_ORDER.length - (D.bgUnimplemented || []).length) + " simulated",
+    pal: D.pals.length + " palettes",
+    customPal: D.customPals.length + " custom palettes",
+    sfxPtrs: D.sfx.length + " effects",
+    monPalettes: MON_LIST.length + " species",
+    monCries: MON_CRIES.length + " entries over " + CRY_LABELS.length + " cries",
+    musicPtrs: MUSIC_LIST.length + " battle tracks",
+    audioIndex: MUSIC_FILES.length + " music files",
+    charmap: CHARMAP.length + " characters",
+    font: FONT_TILES ? FONT_TILES.length + " glyphs" : "not decoded",
+    animCmds: Object.keys(PIC_SWAPS.sub).length + " sub, " +
+              Object.keys(PIC_SWAPS.minimize).length + " minimize layouts",
+    bgEffectsTables: BG_PIC_RESIZE.squares.length + " pic squares",
+  };
+  for (const r of REPO_REPORT) if (yielded[r.key]) r.got = yielded[r.key];
+
   REPO = repo;
   await loadMonPics();
   buildMonPickers();
@@ -1711,14 +1832,40 @@ const monPicCanvas = new Map();        // "side:shiny:byte" -> canvas
    Simply swapping the middle pair for those species - which is what --reverse
    looks like it means - inverted exactly those eight. */
 const GBC_WHITE = 0xffffff, GBC_BLACK = 0x000000;
-function gbcPalette(plte, reverse){
-  const lum = c => 0.299 * ((c >> 16) & 0xff) + 0.587 * ((c >> 8) & 0xff)
-                 + 0.114 * (c & 0xff);
-  const sorted = plte.slice().sort((a, b) => reverse ? lum(a) - lum(b) : lum(b) - lum(a));
+// gbcpal works on 5-bit CGB components, not the png's 8-bit values
+const to5 = v => Math.round(v * 31 / 255);
+const rgb5 = c => [to5((c >> 16) & 0xff), to5((c >> 8) & 0xff), to5(c & 0xff)];
+const lum5 = c => { const [r, g, b] = rgb5(c); return 0.299*r + 0.587*g + 0.114*b; };
+const pack5 = c => { const [r, g, b] = rgb5(c); return (b << 10) | (g << 5) | r; };
+const isWhite5 = c => pack5(c) === ((31 << 10) | (31 << 5) | 31);
+const isBlack5 = c => pack5(c) === 0;
+
+/* tools/gbcpal builds a species' palette from *both* pics: the Makefile has
+
+     gfx/pokemon/%/normal.gbcpal: gfx/pokemon/%/front.gbcpal gfx/pokemon/%/back.gbcpal
+
+   and the tool pools every colour from its inputs, sorts them by luminance
+   (lightest first, or darkest first with --reverse), drops black, white and
+   adjacent duplicates, and keeps the first two. So one palette serves both
+   the frontpic and the backpic.
+
+   Reading a single png's palette instead gave each slot whatever order that
+   file happened to be authored in. Where a species' two pics disagree - Slowbro
+   in Sour Crystal - the player and enemy slots ended up with the two middle
+   colours the opposite way round. Ordering also has to happen in 5-bit,
+   because rounding 8-bit values down can flip a near-tie; Sour Crystal's
+   gbcpal additionally breaks exact ties on the packed colour, which is
+   harmless to apply everywhere since it only fires when luminances match. */
+function gbcPalette(colours, reverse){
+  const sorted = colours.slice().sort((a, b) => {
+    const d = (lum5(a) < lum5(b)) - (lum5(a) > lum5(b));
+    if (d) return d * (reverse ? -1 : 1);
+    return (pack5(a) > pack5(b)) - (pack5(a) < pack5(b));
+  });
   const mid = [];
   for (const c of sorted){
-    if (c === GBC_WHITE || c === GBC_BLACK) continue;
-    if (mid.length && mid[mid.length - 1] === c) continue;
+    if (isWhite5(c) || isBlack5(c)) continue;
+    if (mid.length && pack5(mid[mid.length - 1]) === pack5(c)) continue;
     mid.push(c);
   }
   return [GBC_WHITE,
@@ -1727,17 +1874,63 @@ function gbcPalette(plte, reverse){
           GBC_BLACK];
 }
 
+/* The palette comes from the pics, because that is what the Makefile builds:
+
+     %.gbcpal: %.png
+     gfx/pokemon/%/normal.gbcpal: gfx/pokemon/%/front.gbcpal gfx/pokemon/%/back.gbcpal
+
+   A checked-in normal.pal is *not* an input to that - Sour Crystal carries one
+   for all 252 species and the ROM ignores every one of them, so preferring it
+   put Slowbro's two middle colours in the file's order rather than gbcpal's
+   and swapped the sprite. It is kept only as a fallback for a species with no
+   pic to derive from, and even then it goes through the same ordering. */
+const monPalCache = new Map();
+async function speciesPalette(repo, entry, dirs){
+  if (monPalCache.has(entry.folder)) return monPalCache.get(entry.folder);
+  const pool = [];
+  for (const dir of dirs)
+    for (const which of ["front", "back"]){
+      try {
+        const img = await loadImageRGBA(await repo.bytes("gfx/pokemon/" + dir + "/" + which + ".png"));
+        if (img.pal && img.pal.length === 4) pool.push(...img.pal);
+      } catch (e){}
+    }
+  if (!pool.length){                      // no pic: fall back to a shipped pal
+    try {
+      const own = parseShinyPal(await repo.text("gfx/pokemon/" + entry.folder + "/normal.pal"));
+      if (own) pool.push(GBC_WHITE, own[0], own[1], GBC_BLACK);
+    } catch (e){}
+  }
+  const pal = pool.length ? gbcPalette(pool, entry.reverse) : null;
+  monPalCache.set(entry.folder, pal);
+  return pal;
+}
+
 /* A pic png must be a 4-colour indexed image: gbcpal reads its palette chunk,
    and rgbgfx rejects anything else at build time. The loader holds to that
    rather than guessing a palette out of the pixels, so a sprite that has lost
    its palette chunk - which is what re-saving from most image editors does -
    fails here and is reported by checkMonPics below instead of quietly
    rendering in colours the ROM would never show. */
-function picPalette(img, w, reverse){
-  if (!img.idx || !img.pal || img.pal.length !== 4) return null;
-  const pal = gbcPalette(img.pal.slice(0, 4), reverse);
+function picPalette(img, w, pal){
+  if (!img.idx || !img.pal || img.pal.length !== 4 || !pal) return null;
+  /* The png's own index order is whatever that file was authored in, while the
+     palette is the pooled one, so indices are remapped by colour rather than
+     carried across. A colour that is in this pic but not in the pooled four
+     falls to the nearest by luminance. */
+  const remap = img.pal.map(c => {
+    let i = pal.findIndex(p => pack5(p) === pack5(c));
+    if (i < 0){
+      let bd = Infinity;
+      for (let k = 0; k < 4; k++){
+        const d = Math.abs(lum5(pal[k]) - lum5(c));
+        if (d < bd){ bd = d; i = k; }
+      }
+    }
+    return i;
+  });
   const idx = new Uint8Array(w * w);
-  idx.set(img.idx.subarray(0, w * w));              // frame 0 only
+  for (let i = 0; i < w * w; i++) idx[i] = remap[img.idx[i]] || 0;   // frame 0
   return {idx, pal};
 }
 
@@ -1759,26 +1952,68 @@ function pngInfo(bytes){
   return {w, h, ctype, plte};
 }
 
-// name every pic that is not a 4-colour indexed png, so they can be fixed
+/* Scan every species' pics in the loaded repo. Two classes of problem:
+
+   - encoding: rgbgfx needs a 4-colour indexed png, and re-saving from most
+     image editors drops the palette chunk. These do not load at all.
+   - palette: gbcpal pools front and back and orders the two middle colours by
+     5-bit luminance. Colours close in luminance can order either way depending
+     on how the file was written, and a species whose pics hold *different*
+     colours has no single right answer - both are worth a look even though
+     they load fine.
+
+   Header chunks only, so the whole dex costs one quick pass. */
 async function checkMonPics(repo, list){
-  const bad = [];
+  const bad = [], warn = [], info = [];
+  const rev = list.filter(e => e.reverse).map(e => e.folder);
+  info.push("--reverse species from the Makefile (" + rev.length + "): " +
+            (rev.length ? rev.join(", ") : "none"));
   for (const e of list){
+    const found = [];
     for (const which of ["front", "back"]){
       for (const dir of [e.folder, e.folder + "_s"]){
-        let info = null;
-        try { info = pngInfo(await repo.bytes("gfx/pokemon/" + dir + "/" + which + ".png")); }
-        catch (err){ continue; }                     // not this folder
-        if (!info) continue;
-        if (info.ctype !== 3)
-          bad.push(dir + "/" + which + ".png (" +
-            ({0:"greyscale", 2:"RGB", 4:"greyscale+alpha", 6:"RGBA"}[info.ctype] || "type " + info.ctype) + ")");
-        else if (info.plte !== 4)
-          bad.push(dir + "/" + which + ".png (" + info.plte + "-colour palette)");
+        const file = "gfx/pokemon/" + dir + "/" + which + ".png";
+        let bytes = null;
+        try { bytes = await repo.bytes(file); } catch (err){ continue; }
+        const info = pngInfo(bytes);
+        if (!info){ bad.push(file + " (unreadable)"); break; }
+        if (info.ctype !== 3){
+          bad.push(file + " (" + ({0:"greyscale", 2:"RGB", 4:"greyscale+alpha",
+            6:"RGBA"}[info.ctype] || "type " + info.ctype) + ", needs 4-colour indexed)");
+          break;
+        }
+        if (info.plte !== 4){
+          bad.push(file + " (" + info.plte + "-colour palette, needs 4)");
+          break;
+        }
+        try {
+          const img = await loadImageRGBA(bytes);
+          if (img.pal && img.pal.length === 4) found.push({file, pal: img.pal});
+        } catch (err){ bad.push(file + " (decode failed)"); }
         break;
       }
     }
+    if (found.length === 2){
+      const a = found[0].pal, b = found[1].pal;
+      const set = p => p.map(pack5).sort((x, y) => x - y).join(",");
+      if (set(a) !== set(b))
+        warn.push(e.folder + ": front and back use different colours");
+      else {
+        const mid = gbcPalette([...a, ...b], e.reverse).slice(1, 3);
+        // the resolved pair, so a wrong order can be seen rather than guessed
+        e.resolved = mid;
+        /* A near-tie is not an error - base pokecrystal has a few and every
+           one resolves correctly - but it is where a re-saved palette is most
+           likely to come out the other way round, so it is worth knowing
+           which species to eyeball. Kept tight to avoid crying wolf. */
+        const gap = Math.abs(lum5(mid[0]) - lum5(mid[1]));
+        if (gap < 0.5)
+          warn.push(e.folder + ": middle colours differ by only " + gap.toFixed(2) +
+                    " in luminance - check the order looks right");
+      }
+    }
   }
-  return bad;
+  return {bad, warn, info};
 }
 
 // A terse reason for the slot notice; checkMonPics logs the full per-file list
@@ -1814,19 +2049,11 @@ async function loadMonPic(repo, entry, back){
   }
   if (!img) return null;
   const size = img.w / 8;
-  const decoded = picPalette(img, img.w, entry.reverse);
+  let pal = await speciesPalette(repo, entry, dirs);
+  const decoded = picPalette(img, img.w, pal);
   if (!decoded) return null;
   const frame = decoded.idx;
-  let pal = decoded.pal;
-  /* Most species have no normal.pal: the Makefile generates normal.gbcpal
-     from the png, so the png's own palette is the source. The few that ship
-     one - Unown, whose folder has no png to derive from - are the exception,
-     and theirs wins. Colours 0 and 3 stay pure white and black either way,
-     as gbcpal forces them. */
-  try {
-    const own = parseShinyPal(await repo.text("gfx/pokemon/" + entry.folder + "/normal.pal"));
-    if (own) pal = [GBC_WHITE, own[0], own[1], GBC_BLACK];
-  } catch (e){}
+  pal = decoded.pal;                      // speciesPalette already ordered it
   let shinyPal = pal.slice();
   try {
     const sh = parseShinyPal(await repo.text(entry.shinyFile));
@@ -5248,7 +5475,7 @@ class Sim {
   }
   reset(){
     this.stack = [{label:this.root, ip:0}];
-    this.objs = []; this.tileDict = {}; this.tileTop = 0;
+    this.objs = []; this.tileDict = {}; this.tileTop = 0; this.gfxLoaded = [];
     this.wait = 0; this.done = false; this.frame = 0;
     this.vars = 0; this.loops = {}; this.events = []; this.lastIp = null;
     this.lastIndex = 0;
@@ -5309,10 +5536,11 @@ class Sim {
       case "anim_wait": this.wait = nv(a[0]); break;
       case "anim_1gfx": case "anim_2gfx": case "anim_3gfx":
       case "anim_4gfx": case "anim_5gfx": {
-        this.tileDict = {}; this.tileTop = 0;
+        this.tileDict = {}; this.tileTop = 0; this.gfxLoaded = [];
         for (const g of a){
           const k = g.trim(), gi = gfxIndex(k);
           this.tileDict[k] = this.tileTop;
+          this.gfxLoaded.push(k);
           this.tileTop += gi >= 0 ? (D.gfx[gi].count || 0) : 0;
         }
         break;
@@ -5799,19 +6027,50 @@ function objDrawState(o, sim, animLabel){
   return {x, y, xoff, yoff: o.yoff, oamFlags};
 }
 
+/* The loaded gfx sets end to end, which is what VRAM holds. Cached per set
+   list, since it only changes when an anim_Ngfx runs. */
+let vramCache = {key: null, tiles: null};
+function vramFor(sim){
+  const list = sim.gfxLoaded || [];
+  const key = list.join(",");
+  if (vramCache.key === key) return vramCache.tiles;
+  let total = 0;
+  const parts = list.map(k => {
+    const gi = gfxIndex(k);
+    const want = gi >= 0 ? (D.gfx[gi].count || 0) : 0;
+    const t = TILES[k] || new Uint8Array(0);
+    total += want * 64;
+    return {t, want};
+  });
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const {t, want} of parts){
+    out.set(t.subarray(0, Math.min(t.length, want * 64)), at);
+    at += want * 64;                     // short sets leave their gap blank
+  }
+  vramCache = {key, tiles: out};
+  return out;
+}
+
 function drawObj(o, sim){
   const f = o.cur;
   if (!f) return null;
   const oam = D.oamsets[f.oamset];
   if (!oam) return null;
-  const tiles = TILES[o.def.gfx];
-  // Tile ids in OAM data are relative to the object's own gfx set: on hardware
-  // the id is tileDict[gfx] + oamset.vtile + entry.tile, and tileDict[gfx] is
-  // exactly where that set was loaded into VRAM - so within the set's own
-  // tiles the index is just oamset.vtile + entry.tile. (Adding tileDict here
-  // ran every set after the first off the end of its file.)
-  const base = oam.vtile;
-  o.unloaded = sim.tileDict[o.def.gfx] === undefined;
+  /* Tile ids are absolute positions in the loaded graphics, so the object's
+     gfx sets are concatenated in load order to stand in for VRAM and the id is
+     tileDict[gfx] + oamset.vtile + entry.tile.
+
+     The fallback matters: GetBattleAnimTileOffset walks wBattleAnimTileDict and
+     on a miss does `xor a`, so an object whose set was never loaded draws from
+     offset 0 - the first set the animation did load. Sour Crystal relies on
+     this for Minimize, whose object still names BATTLE_ANIM_GFX_HIT while the
+     animation loads only MISC_2 with the minimize graphic folded into it.
+     Reading the object's declared set instead showed hit sparks. */
+  const tiles = vramFor(sim);
+  const off = sim.tileDict[o.def.gfx];
+  const base = (off === undefined ? 0 : off) + oam.vtile;
+  o.unloaded = off === undefined;
   const pal = palFor(o.pal, sim.screen.objPalSet);
   /* BattleAnim_SetOBPals applies wOBP0 by copying just two CGB palettes,
      starting at PAL_BATTLE_OB_GRAY, so the gray/yellow cyclers recolour only
@@ -6321,6 +6580,7 @@ async function loadMonPics(){
   // the newest may publish, or a slower earlier pic overwrites the current one
   const seq = ++monLoadSeq;
   monPicCanvas.clear(); transformPicCache.clear(); swapPicCache.clear();
+  monPalCache.clear();
   for (const side of [0, 1]){
     const entry = MON_LIST[monPick[side]];
     if (!entry) continue;
