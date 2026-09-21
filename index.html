@@ -473,6 +473,12 @@ function enumList(consts, prefix){
 const LABEL_CH = "[A-Za-z0-9_$#@]";
 const LABEL_RE = new RegExp("^([A-Za-z_]" + LABEL_CH + "*):{1,2}\\s*$");
 const LOCAL_RE = new RegExp("^\\.(" + LABEL_CH + "+):?$");
+/* A local label's colon is optional in rgbasm, and forks use both forms -
+   Sour Crystal's .Frameset_GrowingBubble has none, which left the Whirlpool
+   object pointing at a frameset that was never registered. Matches a label
+   either followed by a colon or alone on its line. */
+const LOCAL_DEF = new RegExp("^\\.(" + LABEL_CH + "+)(?::|\\s*$)");
+const LOCAL_REF = new RegExp("^dw\\s+\\.(" + LABEL_CH + "+)");
 const CMD_RE = /^([A-Za-z_]\w*)\b\s*(.*)$/;
 
 function parseAnimations(text){
@@ -564,9 +570,9 @@ function parseFramesets(text, consts){
   for (const raw of text.split("\n")){
     const s = stripComment(raw)[0].trim();
     if (!s) continue;
-    let m = s.match(/^dw\s+\.(\w+)/);
+    let m = s.match(LOCAL_REF);
     if (inTable && m){ order.push(m[1]); continue; }
-    if ((m = s.match(/^\.(\w+):/))){
+    if ((m = s.match(LOCAL_DEF))){
       inTable = false;
       if (starts[m[1]] === undefined) starts[m[1]] = entries.length;
       continue;
@@ -618,7 +624,7 @@ function parseOam(text, consts){
       table.push({vtile:num(a[0], consts), len:num(a[1], consts), ptr:a[2].replace(/^\./,"")});
       continue;
     }
-    if ((m = s.match(/^\.(\w+):/))){
+    if ((m = s.match(LOCAL_DEF))){
       if (starts[m[1]] === undefined) starts[m[1]] = sprites.length;
       continue;
     }
